@@ -16,6 +16,9 @@
 #include <cinttypes>
 #include <cstdio>
 #include <limits>
+#include <atomic>
+#include <mutex>
+#include <vector>
 
 #include <faiss/utils/hamming.h>
 #include <faiss/utils/utils.h>
@@ -32,7 +35,58 @@ namespace faiss {
 
 using ScopedIds = InvertedLists::ScopedIds;
 using ScopedCodes = InvertedLists::ScopedCodes;
+void IndexIVF::ensure_list_stats_storage_() const {
+    if (!list_stats_) {
+        list_stats_ = std::make_shared<ListStats>();
+    }
 
+    std::lock_guard<std::mutex> lock(list_stats_->mutex);
+
+    if (list_stats_->probe_count.size() != nlist) {
+        list_stats_->probe_count.assign(nlist, 0);
+        list_stats_->scan_count.assign(nlist, 0);
+        list_stats_->scanned_vectors.assign(nlist, 0);
+    }
+}
+
+void IndexIVF::reset_list_stats() const {
+    ensure_list_stats_storage_();
+
+    std::lock_guard<std::mutex> lock(list_stats_->mutex);
+    std::fill(
+            list_stats_->probe_count.begin(),
+            list_stats_->probe_count.end(),
+            uint64_t(0));
+    std::fill(
+            list_stats_->scan_count.begin(),
+            list_stats_->scan_count.end(),
+            uint64_t(0));
+    std::fill(
+            list_stats_->scanned_vectors.begin(),
+            list_stats_->scanned_vectors.end(),
+            uint64_t(0));
+}
+
+std::vector<uint64_t> IndexIVF::get_list_probe_count() const {
+    ensure_list_stats_storage_();
+
+    std::lock_guard<std::mutex> lock(list_stats_->mutex);
+    return list_stats_->probe_count;
+}
+
+std::vector<uint64_t> IndexIVF::get_list_scan_count() const {
+    ensure_list_stats_storage_();
+
+    std::lock_guard<std::mutex> lock(list_stats_->mutex);
+    return list_stats_->scan_count;
+}
+
+std::vector<uint64_t> IndexIVF::get_list_scanned_vectors() const {
+    ensure_list_stats_storage_();
+
+    std::lock_guard<std::mutex> lock(list_stats_->mutex);
+    return list_stats_->scanned_vectors;
+}
 /*****************************************
  * Level1Quantizer implementation
  ******************************************/
@@ -308,6 +362,8 @@ void IndexIVF::search(
         float* distances,
         idx_t* labels,
         const SearchParameters* params_in) const {
+
+    ensure_list_stats_storage_();
     FAISS_THROW_IF_NOT(k > 0);
     FAISS_THROW_IF_NOT_MSG(invlists, "IVF index has no inverted lists");
     const IVFSearchParameters* params = nullptr;
@@ -337,6 +393,15 @@ void IndexIVF::search(
                 coarse_dis.get(),
                 idx.get(),
                 params ? params->quantizer_params : nullptr);
+         {
+            std::lock_guard<std::mutex> lock(this->list_stats_->mutex);
+            for (idx_t i = 0; i < n * idx_t(nprobe); ++i) {
+                idx_t key = idx[i];
+                if (key >= 0 && key < idx_t(this->nlist)) {
+                    this->list_stats_->probe_count[key]++;
+                }
+            }
+        }
 
         double t1 = getmillisecs();
         invlists->prefetch_lists(idx.get(), sub_n * cur_nprobe);
@@ -409,6 +474,7 @@ void IndexIVF::search_preassigned(
         bool store_pairs,
         const IVFSearchParameters* params,
         IndexIVFStats* ivf_stats) const {
+    ensure_list_stats_storage_();
     FAISS_THROW_IF_NOT(k > 0);
     FAISS_THROW_IF_NOT_MSG(invlists, "IVF index has no inverted lists");
 
@@ -548,6 +614,12 @@ void IndexIVF::search_preassigned(
                     nheap += scanner->iterate_codes(
                             it.get(), simi, idxi, k, list_size);
 
+                    {
+                        std::lock_guard<std::mutex> lock(this->list_stats_->mutex);
+                        this->list_stats_->scan_count[key]++;
+                        this->list_stats_->scanned_vectors[key] += list_size;
+                    }
+
                     return list_size;
                 } else {
                     size_t list_size = invlists->list_size(key);
@@ -580,6 +652,11 @@ void IndexIVF::search_preassigned(
                         ids += jmin;
                     }
 
+                    {
+                        std::lock_guard<std::mutex> lock(this->list_stats_->mutex);
+                        this->list_stats_->scan_count[key]++;
+                        this->list_stats_->scanned_vectors[key] += list_size;
+                    }
                     nheap += scanner->scan_codes(
                             list_size, codes, ids, simi, idxi, k);
 

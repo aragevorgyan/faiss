@@ -10,7 +10,10 @@
 #ifndef FAISS_INDEX_IVF_H
 #define FAISS_INDEX_IVF_H
 
+#include <memory>
+#include <mutex>
 #include <stdint.h>
+#include <vector>
 
 #include <faiss/Clustering.h>
 #include <faiss/Index.h>
@@ -191,6 +194,30 @@ struct IndexIVF : Index, IndexIVFInterface {
      */
     int parallel_mode = 0;
     const int PARALLEL_MODE_NO_HEAP_INIT = 1024;
+
+    /****************************************************
+     * Per-list instrumentation counters
+     *
+     * Stored behind a shared_ptr so IndexIVF remains copyable.
+     ****************************************************/
+    struct ListStats {
+        mutable std::mutex mutex;
+        std::vector<uint64_t> probe_count;
+        std::vector<uint64_t> scan_count;
+        std::vector<uint64_t> scanned_vectors;
+    };
+
+    mutable std::shared_ptr<ListStats> list_stats_;
+
+    void ensure_list_stats_storage_() const;
+
+    /// Reset all per-list counters to zero
+    void reset_list_stats() const;
+
+    /// Snapshot helpers for external analysis / logging
+    std::vector<uint64_t> get_list_probe_count() const;
+    std::vector<uint64_t> get_list_scan_count() const;
+    std::vector<uint64_t> get_list_scanned_vectors() const;
 
     /** optional map that maps back ids to invlist entries. This
      *  enables reconstruct() */
