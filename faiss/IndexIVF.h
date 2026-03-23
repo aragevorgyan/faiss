@@ -85,6 +85,11 @@ struct InvertedListScanner;
 struct IndexIVFStats;
 struct CodePacker;
 
+enum class MemoryTier : uint8_t {
+    DRAM = 0,
+    CXL = 1
+};
+
 struct IndexIVFInterface : Level1Quantizer {
     size_t nprobe = 1;    ///< number of probes at query time
     size_t max_codes = 0; ///< max nb of codes to visit to do a query
@@ -202,22 +207,47 @@ struct IndexIVF : Index, IndexIVFInterface {
      ****************************************************/
     struct ListStats {
         mutable std::mutex mutex;
-        std::vector<uint64_t> probe_count;
-        std::vector<uint64_t> scan_count;
-        std::vector<uint64_t> scanned_vectors;
+
+        // lifetime totals
+        std::vector<uint64_t> probe_count_total;
+        std::vector<uint64_t> scan_count_total;
+        std::vector<uint64_t> scanned_vectors_total;
+
+        // current epoch counters
+        std::vector<uint64_t> probe_count_epoch;
+        std::vector<uint64_t> scan_count_epoch;
+        std::vector<uint64_t> scanned_vectors_epoch;
     };
 
     mutable std::shared_ptr<ListStats> list_stats_;
+        
+    // logical placement state per list
+    mutable std::vector<MemoryTier> list_tier_;
 
     void ensure_list_stats_storage_() const;
+    void ensure_list_tier_storage_() const;
 
-    /// Reset all per-list counters to zero
+    /// reset all totals and epoch counters
     void reset_list_stats() const;
+
+    /// reset only epoch counters
+    void reset_list_epoch_stats() const;
 
     /// Snapshot helpers for external analysis / logging
     std::vector<uint64_t> get_list_probe_count() const;
     std::vector<uint64_t> get_list_scan_count() const;
     std::vector<uint64_t> get_list_scanned_vectors() const;
+
+	/// epoch getters
+    std::vector<uint64_t> get_list_probe_count_epoch() const;
+    std::vector<uint64_t> get_list_scan_count_epoch() const;
+    std::vector<uint64_t> get_list_scanned_vectors_epoch() const;
+
+	/// tier getters/setters
+    std::vector<MemoryTier> get_list_tiers() const;
+    MemoryTier get_list_tier(size_t list_no) const;
+    void set_list_tier(size_t list_no, MemoryTier tier);
+    void set_all_list_tiers(MemoryTier tier);
 
     /** optional map that maps back ids to invlist entries. This
      *  enables reconstruct() */

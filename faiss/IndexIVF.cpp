@@ -17,7 +17,6 @@
 #include <cstdio>
 #include <limits>
 #include <atomic>
-#include <mutex>
 #include <vector>
 
 #include <faiss/utils/hamming.h>
@@ -42,10 +41,20 @@ void IndexIVF::ensure_list_stats_storage_() const {
 
     std::lock_guard<std::mutex> lock(list_stats_->mutex);
 
-    if (list_stats_->probe_count.size() != nlist) {
-        list_stats_->probe_count.assign(nlist, 0);
-        list_stats_->scan_count.assign(nlist, 0);
-        list_stats_->scanned_vectors.assign(nlist, 0);
+    if (list_stats_->probe_count_total.size() != nlist) {
+        list_stats_->probe_count_total.assign(nlist, 0);
+        list_stats_->scan_count_total.assign(nlist, 0);
+        list_stats_->scanned_vectors_total.assign(nlist, 0);
+
+        list_stats_->probe_count_epoch.assign(nlist, 0);
+        list_stats_->scan_count_epoch.assign(nlist, 0);
+        list_stats_->scanned_vectors_epoch.assign(nlist, 0);
+    }
+}
+
+void IndexIVF::ensure_list_tier_storage_() const {
+    if (list_tier_.size() != nlist) {
+        list_tier_.assign(nlist, MemoryTier::DRAM);
     }
 }
 
@@ -53,40 +62,111 @@ void IndexIVF::reset_list_stats() const {
     ensure_list_stats_storage_();
 
     std::lock_guard<std::mutex> lock(list_stats_->mutex);
+
     std::fill(
-            list_stats_->probe_count.begin(),
-            list_stats_->probe_count.end(),
+            list_stats_->probe_count_total.begin(),
+            list_stats_->probe_count_total.end(),
             uint64_t(0));
     std::fill(
-            list_stats_->scan_count.begin(),
-            list_stats_->scan_count.end(),
+            list_stats_->scan_count_total.begin(),
+            list_stats_->scan_count_total.end(),
             uint64_t(0));
     std::fill(
-            list_stats_->scanned_vectors.begin(),
-            list_stats_->scanned_vectors.end(),
+            list_stats_->scanned_vectors_total.begin(),
+            list_stats_->scanned_vectors_total.end(),
+            uint64_t(0));
+
+    std::fill(
+            list_stats_->probe_count_epoch.begin(),
+            list_stats_->probe_count_epoch.end(),
+            uint64_t(0));
+    std::fill(
+            list_stats_->scan_count_epoch.begin(),
+            list_stats_->scan_count_epoch.end(),
+            uint64_t(0));
+    std::fill(
+            list_stats_->scanned_vectors_epoch.begin(),
+            list_stats_->scanned_vectors_epoch.end(),
+            uint64_t(0));
+}
+
+void IndexIVF::reset_list_epoch_stats() const {
+    ensure_list_stats_storage_();
+
+    std::lock_guard<std::mutex> lock(list_stats_->mutex);
+
+    std::fill(
+            list_stats_->probe_count_epoch.begin(),
+            list_stats_->probe_count_epoch.end(),
+            uint64_t(0));
+    std::fill(
+            list_stats_->scan_count_epoch.begin(),
+            list_stats_->scan_count_epoch.end(),
+            uint64_t(0));
+    std::fill(
+            list_stats_->scanned_vectors_epoch.begin(),
+            list_stats_->scanned_vectors_epoch.end(),
             uint64_t(0));
 }
 
 std::vector<uint64_t> IndexIVF::get_list_probe_count() const {
     ensure_list_stats_storage_();
-
     std::lock_guard<std::mutex> lock(list_stats_->mutex);
-    return list_stats_->probe_count;
+    return list_stats_->probe_count_total;
 }
 
 std::vector<uint64_t> IndexIVF::get_list_scan_count() const {
     ensure_list_stats_storage_();
-
     std::lock_guard<std::mutex> lock(list_stats_->mutex);
-    return list_stats_->scan_count;
+    return list_stats_->scan_count_total;
 }
 
 std::vector<uint64_t> IndexIVF::get_list_scanned_vectors() const {
     ensure_list_stats_storage_();
-
     std::lock_guard<std::mutex> lock(list_stats_->mutex);
-    return list_stats_->scanned_vectors;
+    return list_stats_->scanned_vectors_total;
 }
+
+std::vector<uint64_t> IndexIVF::get_list_probe_count_epoch() const {
+    ensure_list_stats_storage_();
+    std::lock_guard<std::mutex> lock(list_stats_->mutex);
+    return list_stats_->probe_count_epoch;
+}
+
+std::vector<uint64_t> IndexIVF::get_list_scan_count_epoch() const {
+    ensure_list_stats_storage_();
+    std::lock_guard<std::mutex> lock(list_stats_->mutex);
+    return list_stats_->scan_count_epoch;
+}
+
+std::vector<uint64_t> IndexIVF::get_list_scanned_vectors_epoch() const {
+    ensure_list_stats_storage_();
+    std::lock_guard<std::mutex> lock(list_stats_->mutex);
+    return list_stats_->scanned_vectors_epoch;
+}
+
+std::vector<MemoryTier> IndexIVF::get_list_tiers() const {
+    ensure_list_tier_storage_();
+    return list_tier_;
+}
+
+MemoryTier IndexIVF::get_list_tier(size_t list_no) const {
+    ensure_list_tier_storage_();
+    FAISS_THROW_IF_NOT(list_no < nlist);
+    return list_tier_[list_no];
+}
+
+void IndexIVF::set_list_tier(size_t list_no, MemoryTier tier) {
+    ensure_list_tier_storage_();
+    FAISS_THROW_IF_NOT(list_no < nlist);
+    list_tier_[list_no] = tier;
+}
+
+void IndexIVF::set_all_list_tiers(MemoryTier tier) {
+    ensure_list_tier_storage_();
+    std::fill(list_tier_.begin(), list_tier_.end(), tier);
+}
+
 /*****************************************
  * Level1Quantizer implementation
  ******************************************/
@@ -364,6 +444,7 @@ void IndexIVF::search(
         const SearchParameters* params_in) const {
 
     ensure_list_stats_storage_();
+    ensure_list_tier_storage_();
     FAISS_THROW_IF_NOT(k > 0);
     FAISS_THROW_IF_NOT_MSG(invlists, "IVF index has no inverted lists");
     const IVFSearchParameters* params = nullptr;
@@ -398,7 +479,8 @@ void IndexIVF::search(
             for (idx_t i = 0; i < n * idx_t(nprobe); ++i) {
                 idx_t key = idx[i];
                 if (key >= 0 && key < idx_t(this->nlist)) {
-                    this->list_stats_->probe_count[key]++;
+                    this->list_stats_->probe_count_total[key]++;
+                    this->list_stats_->probe_count_epoch[key]++;
                 }
             }
         }
@@ -475,6 +557,7 @@ void IndexIVF::search_preassigned(
         const IVFSearchParameters* params,
         IndexIVFStats* ivf_stats) const {
     ensure_list_stats_storage_();
+    ensure_list_tier_storage_();
     FAISS_THROW_IF_NOT(k > 0);
     FAISS_THROW_IF_NOT_MSG(invlists, "IVF index has no inverted lists");
 
@@ -616,8 +699,10 @@ void IndexIVF::search_preassigned(
 
                     {
                         std::lock_guard<std::mutex> lock(this->list_stats_->mutex);
-                        this->list_stats_->scan_count[key]++;
-                        this->list_stats_->scanned_vectors[key] += list_size;
+                        this->list_stats_->scan_count_total[key]++;
+                        this->list_stats_->scan_count_epoch[key]++;
+                        this->list_stats_->scanned_vectors_total[key] += list_size;
+                        this->list_stats_->scanned_vectors_epoch[key] += list_size;
                     }
 
                     return list_size;
@@ -654,8 +739,10 @@ void IndexIVF::search_preassigned(
 
                     {
                         std::lock_guard<std::mutex> lock(this->list_stats_->mutex);
-                        this->list_stats_->scan_count[key]++;
-                        this->list_stats_->scanned_vectors[key] += list_size;
+                        this->list_stats_->scan_count_total[key]++;
+                        this->list_stats_->scan_count_epoch[key]++;
+                        this->list_stats_->scanned_vectors_total[key] += list_size;
+                        this->list_stats_->scanned_vectors_epoch[key] += list_size;
                     }
                     nheap += scanner->scan_codes(
                             list_size, codes, ids, simi, idxi, k);
