@@ -474,16 +474,16 @@ void IndexIVF::search(
                 coarse_dis.get(),
                 idx.get(),
                 params ? params->quantizer_params : nullptr);
-         {
-            std::lock_guard<std::mutex> lock(this->list_stats_->mutex);
-            for (idx_t i = 0; i < n * idx_t(nprobe); ++i) {
-                idx_t key = idx[i];
-                if (key >= 0 && key < idx_t(this->nlist)) {
-                    this->list_stats_->probe_count_total[key]++;
-                    this->list_stats_->probe_count_epoch[key]++;
+            {
+                std::lock_guard<std::mutex> lock(this->list_stats_->mutex);
+                for (idx_t i = 0; i < sub_n * idx_t(cur_nprobe); ++i) {
+                    idx_t key = idx[i];
+                    if (key >= 0 && key < idx_t(this->nlist)) {
+                        this->list_stats_->probe_count_total[key]++;
+                        this->list_stats_->probe_count_epoch[key]++;
+                    }
                 }
             }
-        }
 
         double t1 = getmillisecs();
         invlists->prefetch_lists(idx.get(), sub_n * cur_nprobe);
