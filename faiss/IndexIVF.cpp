@@ -167,6 +167,93 @@ void IndexIVF::set_all_list_tiers(MemoryTier tier) {
     std::fill(list_tier_.begin(), list_tier_.end(), tier);
 }
 
+void IndexIVF::recompute_tiers_from_epoch_stats(
+        size_t hot_lists_to_keep_in_dram) {
+    ensure_list_stats_storage_();
+    ensure_list_tier_storage_();
+
+    struct HotnessEntry {
+        size_t list_no;
+        uint64_t work;
+    };
+
+    std::vector<HotnessEntry> entries;
+    entries.reserve(nlist);
+
+    {
+        std::lock_guard<std::mutex> lock(list_stats_->mutex);
+        for (size_t i = 0; i < nlist; i++) {
+            entries.push_back(
+                    HotnessEntry{i, list_stats_->scanned_vectors_epoch[i]});
+        }
+    }
+
+    std::sort(
+            entries.begin(),
+            entries.end(),
+            [](const HotnessEntry& a, const HotnessEntry& b) {
+                if (a.work != b.work) {
+                    return a.work > b.work;
+                }
+                return a.list_no < b.list_no;
+            });
+
+    std::fill(list_tier_.begin(), list_tier_.end(), MemoryTier::CXL);
+
+    size_t actual_hot = std::min(hot_lists_to_keep_in_dram, entries.size());
+    for (size_t i = 0; i < actual_hot; i++) {
+        list_tier_[entries[i].list_no] = MemoryTier::DRAM;
+    }
+}
+
+size_t IndexIVF::count_tier_changes_if_recomputed_from_epoch_stats(
+        size_t hot_lists_to_keep_in_dram) const {
+    ensure_list_stats_storage_();
+    ensure_list_tier_storage_();
+
+    struct HotnessEntry {
+        size_t list_no;
+        uint64_t work;
+    };
+
+    std::vector<HotnessEntry> entries;
+    entries.reserve(nlist);
+
+    {
+        std::lock_guard<std::mutex> lock(list_stats_->mutex);
+        for (size_t i = 0; i < nlist; i++) {
+            entries.push_back(
+                    HotnessEntry{i, list_stats_->scanned_vectors_epoch[i]});
+        }
+    }
+
+    std::sort(
+            entries.begin(),
+            entries.end(),
+            [](const HotnessEntry& a, const HotnessEntry& b) {
+                if (a.work != b.work) {
+                    return a.work > b.work;
+                }
+                return a.list_no < b.list_no;
+            });
+
+    std::vector<MemoryTier> proposed(nlist, MemoryTier::CXL);
+
+    size_t actual_hot = std::min(hot_lists_to_keep_in_dram, entries.size());
+    for (size_t i = 0; i < actual_hot; i++) {
+        proposed[entries[i].list_no] = MemoryTier::DRAM;
+    }
+
+    size_t changes = 0;
+    for (size_t i = 0; i < nlist; i++) {
+        if (proposed[i] != list_tier_[i]) {
+            changes++;
+        }
+    }
+
+    return changes;
+}
+
 /*****************************************
  * Level1Quantizer implementation
  ******************************************/

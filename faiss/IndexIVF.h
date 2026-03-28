@@ -249,6 +249,13 @@ struct IndexIVF : Index, IndexIVFInterface {
     void set_list_tier(size_t list_no, MemoryTier tier);
     void set_all_list_tiers(MemoryTier tier);
 
+	/// recompute logical tiers from current epoch hotness
+    void recompute_tiers_from_epoch_stats(size_t hot_lists_to_keep_in_dram);
+
+    /// count how many list tiers would change if recomputed now
+    size_t count_tier_changes_if_recomputed_from_epoch_stats(
+            size_t hot_lists_to_keep_in_dram) const;
+
     /** optional map that maps back ids to invlist entries. This
      *  enables reconstruct() */
     DirectMap direct_map;
