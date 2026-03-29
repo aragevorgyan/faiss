@@ -29,6 +29,7 @@
 #include <faiss/impl/IDSelector.h>
 #include <faiss/impl/ResultHandler.h>
 #include <faiss/impl/expanded_scanners.h>
+#include <faiss/invlists/TieredArrayInvertedLists.h>
 
 namespace faiss {
 
@@ -173,17 +174,15 @@ void IndexIVF::apply_static_tier_placement() {
     ensure_list_tier_storage_();
     FAISS_THROW_IF_NOT_MSG(invlists, "IVF index has no inverted lists");
 
-    // First minimal version:
-    // this is the control hook where physical placement will happen later.
-    // For now, we just walk all lists and validate the tier metadata exists.
+    auto* tiered_invlists =
+            dynamic_cast<TieredArrayInvertedLists*>(invlists);
+
+    FAISS_THROW_IF_NOT_MSG(
+            tiered_invlists,
+            "apply_static_tier_placement requires TieredArrayInvertedLists");
 
     for (size_t i = 0; i < nlist; i++) {
-        MemoryTier tier = list_tier_[i];
-
-        // future step:
-        // if invlists is a tier-aware storage implementation,
-        // ask it to place/move list i according to "tier".
-        (void)tier;
+        tiered_invlists->move_list_to_tier(i, list_tier_[i]);
     }
 }
 

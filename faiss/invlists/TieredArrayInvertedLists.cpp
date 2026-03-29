@@ -106,23 +106,20 @@ void TieredArrayInvertedLists::set_list_tier(size_t list_no, MemoryTier tier) {
 void TieredArrayInvertedLists::move_list_to_tier(size_t list_no, MemoryTier tier) {
     FAISS_THROW_IF_NOT(list_no < nlist);
 
-    if (list_tiers[list_no] == tier) {
+    MemoryTier old_tier = list_tiers[list_no];
+    if (old_tier == tier) {
         return;
     }
 
-    // First real move implementation:
-    // re-materialize list storage into fresh vectors, then swap.
     relocate_list_storage(list_no);
-
-    // after relocation succeeds, update the tier metadata
     list_tiers[list_no] = tier;
 
     printf(
-        "TieredArrayInvertedLists: moved list %zu from %d to %d (size=%zu)\n",
-        list_no,
-        int(list_tiers[list_no]),
-        int(tier),
-        ids[list_no].size());
+            "TieredArrayInvertedLists: moved list %zu from %d to %d (size=%zu)\n",
+            list_no,
+            int(old_tier),
+            int(tier),
+            ids[list_no].size());
 }
 
 void TieredArrayInvertedLists::relocate_list_storage(size_t list_no) {
