@@ -220,6 +220,28 @@ struct IndexIVF : Index, IndexIVFInterface {
     };
 
     mutable std::shared_ptr<ListStats> list_stats_;
+
+	// per-tier work counters
+	struct TierWorkStats {
+        mutable std::mutex mutex;
+        uint64_t dram_scanned_vectors_epoch = 0;
+        uint64_t cxl_scanned_vectors_epoch = 0;
+        uint64_t dram_scanned_vectors_total = 0;
+        uint64_t cxl_scanned_vectors_total = 0;
+    };
+
+    mutable std::shared_ptr<TierWorkStats> tier_work_stats_;
+
+    void ensure_tier_work_stats_storage_() const;
+
+    void reset_tier_work_stats() const;
+    void reset_tier_work_epoch_stats() const;
+
+    uint64_t get_dram_scanned_vectors_epoch() const;
+    uint64_t get_cxl_scanned_vectors_epoch() const;
+    uint64_t get_dram_scanned_vectors_total() const;
+    uint64_t get_cxl_scanned_vectors_total() const;
+	//mutable std::mutex tier_work_stats_mutex_;
         
     // logical placement state per list
     mutable std::vector<MemoryTier> list_tier_;

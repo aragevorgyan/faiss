@@ -60,6 +60,7 @@ void IndexIVF::ensure_list_tier_storage_() const {
 
 void IndexIVF::reset_list_stats() const {
     ensure_list_stats_storage_();
+    reset_tier_work_stats();
 
     std::lock_guard<std::mutex> lock(list_stats_->mutex);
 
@@ -92,6 +93,7 @@ void IndexIVF::reset_list_stats() const {
 
 void IndexIVF::reset_list_epoch_stats() const {
     ensure_list_stats_storage_();
+    reset_tier_work_epoch_stats();
 
     std::lock_guard<std::mutex> lock(list_stats_->mutex);
 
@@ -165,6 +167,52 @@ void IndexIVF::set_list_tier(size_t list_no, MemoryTier tier) {
 void IndexIVF::set_all_list_tiers(MemoryTier tier) {
     ensure_list_tier_storage_();
     std::fill(list_tier_.begin(), list_tier_.end(), tier);
+}
+
+void IndexIVF::ensure_tier_work_stats_storage_() const {
+    if (!tier_work_stats_) {
+        tier_work_stats_ = std::make_shared<TierWorkStats>();
+    }
+}
+
+void IndexIVF::reset_tier_work_stats() const {
+    ensure_tier_work_stats_storage_();
+    std::lock_guard<std::mutex> lock(tier_work_stats_->mutex);
+    tier_work_stats_->dram_scanned_vectors_epoch = 0;
+    tier_work_stats_->cxl_scanned_vectors_epoch = 0;
+    tier_work_stats_->dram_scanned_vectors_total = 0;
+    tier_work_stats_->cxl_scanned_vectors_total = 0;
+}
+
+void IndexIVF::reset_tier_work_epoch_stats() const {
+    ensure_tier_work_stats_storage_();
+    std::lock_guard<std::mutex> lock(tier_work_stats_->mutex);
+    tier_work_stats_->dram_scanned_vectors_epoch = 0;
+    tier_work_stats_->cxl_scanned_vectors_epoch = 0;
+}
+
+uint64_t IndexIVF::get_dram_scanned_vectors_epoch() const {
+    ensure_tier_work_stats_storage_();
+    std::lock_guard<std::mutex> lock(tier_work_stats_->mutex);
+    return tier_work_stats_->dram_scanned_vectors_epoch;
+}
+
+uint64_t IndexIVF::get_cxl_scanned_vectors_epoch() const {
+    ensure_tier_work_stats_storage_();
+    std::lock_guard<std::mutex> lock(tier_work_stats_->mutex);
+    return tier_work_stats_->cxl_scanned_vectors_epoch;
+}
+
+uint64_t IndexIVF::get_dram_scanned_vectors_total() const {
+    ensure_tier_work_stats_storage_();
+    std::lock_guard<std::mutex> lock(tier_work_stats_->mutex);
+    return tier_work_stats_->dram_scanned_vectors_total;
+}
+
+uint64_t IndexIVF::get_cxl_scanned_vectors_total() const {
+    ensure_tier_work_stats_storage_();
+    std::lock_guard<std::mutex> lock(tier_work_stats_->mutex);
+    return tier_work_stats_->cxl_scanned_vectors_total;
 }
 
 void IndexIVF::recompute_tiers_from_epoch_stats(
@@ -792,6 +840,18 @@ void IndexIVF::search_preassigned(
                         this->list_stats_->scanned_vectors_epoch[key] += list_size;
                     }
 
+                    {
+                        ensure_tier_work_stats_storage_();
+                        std::lock_guard<std::mutex> lock(this->tier_work_stats_->mutex);
+                        if (this->list_tier_[key] == MemoryTier::DRAM) {
+                            this->tier_work_stats_->dram_scanned_vectors_epoch += list_size;
+                            this->tier_work_stats_->dram_scanned_vectors_total += list_size;
+                        } else {
+                            this->tier_work_stats_->cxl_scanned_vectors_epoch += list_size;
+                            this->tier_work_stats_->cxl_scanned_vectors_total += list_size;
+                        }
+                    }
+
                     return list_size;
                 } else {
                     size_t list_size = invlists->list_size(key);
@@ -831,6 +891,20 @@ void IndexIVF::search_preassigned(
                         this->list_stats_->scanned_vectors_total[key] += list_size;
                         this->list_stats_->scanned_vectors_epoch[key] += list_size;
                     }
+
+                    {
+                        ensure_tier_work_stats_storage_();
+                        std::lock_guard<std::mutex> lock(this->tier_work_stats_->mutex);
+                        if (this->list_tier_[key] == MemoryTier::DRAM) {
+                            this->tier_work_stats_->dram_scanned_vectors_epoch += list_size;
+                            this->tier_work_stats_->dram_scanned_vectors_total += list_size;
+                        } else {
+                            this->tier_work_stats_->cxl_scanned_vectors_epoch += list_size;
+                            this->tier_work_stats_->cxl_scanned_vectors_total += list_size;
+                        }
+                    }
+
+
                     nheap += scanner->scan_codes(
                             list_size, codes, ids, simi, idxi, k);
 
