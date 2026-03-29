@@ -7,6 +7,7 @@
 
 #include <faiss/invlists/TieredArrayInvertedLists.h>
 
+#include <cstdlib>
 #include <cstring>
 
 #include <faiss/impl/FaissAssert.h>
@@ -17,23 +18,112 @@ TieredArrayInvertedLists::TieredArrayInvertedLists(
         size_t nlist,
         size_t code_size)
         : InvertedLists(nlist, code_size),
-          codes(nlist),
-          ids(nlist),
+          lists(nlist),
           list_tiers(nlist, MemoryTier::DRAM) {}
+
+TieredArrayInvertedLists::~TieredArrayInvertedLists() {
+    reset();
+}
 
 size_t TieredArrayInvertedLists::list_size(size_t list_no) const {
     FAISS_THROW_IF_NOT(list_no < nlist);
-    return ids[list_no].size();
+    return lists[list_no].size;
 }
 
 const uint8_t* TieredArrayInvertedLists::get_codes(size_t list_no) const {
     FAISS_THROW_IF_NOT(list_no < nlist);
-    return codes[list_no].empty() ? nullptr : codes[list_no].data();
+    return lists[list_no].codes;
 }
 
 const idx_t* TieredArrayInvertedLists::get_ids(size_t list_no) const {
     FAISS_THROW_IF_NOT(list_no < nlist);
-    return ids[list_no].empty() ? nullptr : ids[list_no].data();
+    return lists[list_no].ids;
+}
+
+idx_t* TieredArrayInvertedLists::allocate_ids_buffer(size_t n, MemoryTier tier) {
+    (void)tier; // later: route DRAM/CXL to different backends
+    if (n == 0) {
+        return nullptr;
+    }
+
+    void* p = std::malloc(n * sizeof(idx_t));
+    FAISS_THROW_IF_NOT_MSG(p != nullptr, "allocate_ids_buffer failed");
+    return static_cast<idx_t*>(p);
+}
+
+uint8_t* TieredArrayInvertedLists::allocate_codes_buffer(
+        size_t nbytes,
+        MemoryTier tier) {
+    (void)tier; // later: route DRAM/CXL to different backends
+    if (nbytes == 0) {
+        return nullptr;
+    }
+
+    void* p = std::malloc(nbytes);
+    FAISS_THROW_IF_NOT_MSG(p != nullptr, "allocate_codes_buffer failed");
+    return static_cast<uint8_t*>(p);
+}
+
+void TieredArrayInvertedLists::free_ids_buffer(idx_t* ptr, MemoryTier tier) {
+    (void)tier; // later: free with backend-aware allocator
+    std::free(ptr);
+}
+
+void TieredArrayInvertedLists::free_codes_buffer(
+        uint8_t* ptr,
+        MemoryTier tier) {
+    (void)tier; // later: free with backend-aware allocator
+    std::free(ptr);
+}
+
+void TieredArrayInvertedLists::free_list_storage(size_t list_no) {
+    FAISS_THROW_IF_NOT(list_no < nlist);
+
+    auto& lst = lists[list_no];
+    MemoryTier tier = list_tiers[list_no];
+
+    free_ids_buffer(lst.ids, tier);
+    free_codes_buffer(lst.codes, tier);
+
+    lst.ids = nullptr;
+    lst.codes = nullptr;
+    lst.size = 0;
+    lst.capacity = 0;
+}
+
+void TieredArrayInvertedLists::ensure_capacity(size_t list_no, size_t min_capacity) {
+    FAISS_THROW_IF_NOT(list_no < nlist);
+
+    auto& lst = lists[list_no];
+    if (lst.capacity >= min_capacity) {
+        return;
+    }
+
+    size_t new_capacity = lst.capacity == 0 ? min_capacity : lst.capacity;
+    while (new_capacity < min_capacity) {
+        new_capacity *= 2;
+        if (new_capacity < min_capacity) {
+            new_capacity = min_capacity;
+            break;
+        }
+    }
+
+    MemoryTier tier = list_tiers[list_no];
+
+    idx_t* new_ids = allocate_ids_buffer(new_capacity, tier);
+    uint8_t* new_codes = allocate_codes_buffer(new_capacity * code_size, tier);
+
+    if (lst.size > 0) {
+        std::memcpy(new_ids, lst.ids, lst.size * sizeof(idx_t));
+        std::memcpy(new_codes, lst.codes, lst.size * code_size);
+    }
+
+    free_ids_buffer(lst.ids, tier);
+    free_codes_buffer(lst.codes, tier);
+
+    lst.ids = new_ids;
+    lst.codes = new_codes;
+    lst.capacity = new_capacity;
 }
 
 size_t TieredArrayInvertedLists::add_entries(
@@ -43,19 +133,20 @@ size_t TieredArrayInvertedLists::add_entries(
         const uint8_t* code) {
     FAISS_THROW_IF_NOT(list_no < nlist);
 
-    size_t o = ids[list_no].size();
-    ids[list_no].resize(o + n_entry);
-    codes[list_no].resize((o + n_entry) * code_size);
+    auto& lst = lists[list_no];
+    size_t old_size = lst.size;
 
-    if (n_entry > 0) {
-        memcpy(ids[list_no].data() + o, ids_in, sizeof(ids_in[0]) * n_entry);
-        memcpy(
-                codes[list_no].data() + o * code_size,
-                code,
-                code_size * n_entry);
+    if (n_entry == 0) {
+        return old_size;
     }
 
-    return o;
+    ensure_capacity(list_no, old_size + n_entry);
+
+    std::memcpy(lst.ids + old_size, ids_in, n_entry * sizeof(idx_t));
+    std::memcpy(lst.codes + old_size * code_size, code, n_entry * code_size);
+
+    lst.size += n_entry;
+    return old_size;
 }
 
 void TieredArrayInvertedLists::update_entries(
@@ -65,30 +156,32 @@ void TieredArrayInvertedLists::update_entries(
         const idx_t* ids_in,
         const uint8_t* code) {
     FAISS_THROW_IF_NOT(list_no < nlist);
-    FAISS_THROW_IF_NOT(offset + n_entry <= ids[list_no].size());
 
-    if (n_entry > 0) {
-        memcpy(
-                ids[list_no].data() + offset,
-                ids_in,
-                sizeof(ids_in[0]) * n_entry);
-        memcpy(
-                codes[list_no].data() + offset * code_size,
-                code,
-                code_size * n_entry);
+    auto& lst = lists[list_no];
+    FAISS_THROW_IF_NOT(offset + n_entry <= lst.size);
+
+    if (n_entry == 0) {
+        return;
     }
+
+    std::memcpy(lst.ids + offset, ids_in, n_entry * sizeof(idx_t));
+    std::memcpy(lst.codes + offset * code_size, code, n_entry * code_size);
 }
 
 void TieredArrayInvertedLists::resize(size_t list_no, size_t new_size) {
     FAISS_THROW_IF_NOT(list_no < nlist);
-    ids[list_no].resize(new_size);
-    codes[list_no].resize(new_size * code_size);
+
+    auto& lst = lists[list_no];
+    if (new_size > lst.capacity) {
+        ensure_capacity(list_no, new_size);
+    }
+
+    lst.size = new_size;
 }
 
 void TieredArrayInvertedLists::reset() {
     for (size_t i = 0; i < nlist; i++) {
-        ids[i].clear();
-        codes[i].clear();
+        free_list_storage(i);
         list_tiers[i] = MemoryTier::DRAM;
     }
 }
@@ -103,6 +196,33 @@ void TieredArrayInvertedLists::set_list_tier(size_t list_no, MemoryTier tier) {
     list_tiers[list_no] = tier;
 }
 
+void TieredArrayInvertedLists::relocate_list_storage(
+        size_t list_no,
+        MemoryTier dst_tier) {
+    FAISS_THROW_IF_NOT(list_no < nlist);
+
+    auto& lst = lists[list_no];
+    MemoryTier src_tier = list_tiers[list_no];
+
+    if (src_tier == dst_tier) {
+        return;
+    }
+
+    idx_t* new_ids = allocate_ids_buffer(lst.capacity, dst_tier);
+    uint8_t* new_codes = allocate_codes_buffer(lst.capacity * code_size, dst_tier);
+
+    if (lst.size > 0) {
+        std::memcpy(new_ids, lst.ids, lst.size * sizeof(idx_t));
+        std::memcpy(new_codes, lst.codes, lst.size * code_size);
+    }
+
+    free_ids_buffer(lst.ids, src_tier);
+    free_codes_buffer(lst.codes, src_tier);
+
+    lst.ids = new_ids;
+    lst.codes = new_codes;
+}
+
 void TieredArrayInvertedLists::move_list_to_tier(size_t list_no, MemoryTier tier) {
     FAISS_THROW_IF_NOT(list_no < nlist);
 
@@ -111,7 +231,7 @@ void TieredArrayInvertedLists::move_list_to_tier(size_t list_no, MemoryTier tier
         return;
     }
 
-    relocate_list_storage(list_no);
+    relocate_list_storage(list_no, tier);
     list_tiers[list_no] = tier;
 
     printf(
@@ -119,33 +239,6 @@ void TieredArrayInvertedLists::move_list_to_tier(size_t list_no, MemoryTier tier
             list_no,
             int(old_tier),
             int(tier),
-            ids[list_no].size());
+            lists[list_no].size);
 }
-
-void TieredArrayInvertedLists::relocate_list_storage(size_t list_no) {
-    FAISS_THROW_IF_NOT(list_no < nlist);
-
-    const size_t sz = ids[list_no].size();
-    FAISS_THROW_IF_NOT(codes[list_no].size() == sz * code_size);
-
-    // allocate fresh storage
-    std::vector<idx_t> new_ids(sz);
-    std::vector<uint8_t> new_codes(sz * code_size);
-
-    // copy ids
-    if (sz > 0) {
-        memcpy(new_ids.data(), ids[list_no].data(), sz * sizeof(idx_t));
-        memcpy(
-                new_codes.data(),
-                codes[list_no].data(),
-                sz * code_size * sizeof(uint8_t));
-    }
-
-    // swap new storage into place
-    ids[list_no].swap(new_ids);
-    codes[list_no].swap(new_codes);
-
-    // old storage is released automatically when new_ids/new_codes go out of scope
-}
-
 } // namespace faiss
