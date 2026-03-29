@@ -9,6 +9,8 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
+#include <numa.h>
 
 #include <faiss/impl/FaissAssert.h>
 
@@ -41,38 +43,96 @@ const idx_t* TieredArrayInvertedLists::get_ids(size_t list_no) const {
 }
 
 idx_t* TieredArrayInvertedLists::allocate_ids_buffer(size_t n, MemoryTier tier) {
-    (void)tier; // later: route DRAM/CXL to different backends
     if (n == 0) {
         return nullptr;
     }
 
-    void* p = std::malloc(n * sizeof(idx_t));
-    FAISS_THROW_IF_NOT_MSG(p != nullptr, "allocate_ids_buffer failed");
+    const size_t nbytes = n * sizeof(idx_t);
+
+    if (tier == MemoryTier::CXL) {
+        if (numa_available() != -1 && numa_num_configured_nodes() > 1) {
+            void* p = numa_alloc_onnode(nbytes, cxl_numa_node);
+            FAISS_THROW_IF_NOT_MSG(p != nullptr, "numa_alloc_onnode ids failed");
+
+            std::printf("CXL alloc ids: n=%zu bytes=%zu node=%d ptr=%p\n",
+                n, nbytes, cxl_numa_node, p);
+
+            return static_cast<idx_t*>(p);
+        } else {
+            std::fprintf(stderr,
+                    "Warning: NUMA/node1 unavailable for CXL ids allocation, falling back to malloc\n");
+        }
+    }
+
+    void* p = std::malloc(nbytes);
+    FAISS_THROW_IF_NOT_MSG(p != nullptr, "malloc ids failed");
     return static_cast<idx_t*>(p);
 }
 
 uint8_t* TieredArrayInvertedLists::allocate_codes_buffer(
         size_t nbytes,
         MemoryTier tier) {
-    (void)tier; // later: route DRAM/CXL to different backends
     if (nbytes == 0) {
         return nullptr;
     }
 
+    if (tier == MemoryTier::CXL) {
+        if (numa_available() != -1 && numa_num_configured_nodes() > 1) {
+            void* p = numa_alloc_onnode(nbytes, cxl_numa_node);
+            FAISS_THROW_IF_NOT_MSG(p != nullptr, "numa_alloc_onnode codes failed");
+
+            std::printf("CXL alloc codes: bytes=%zu node=%d ptr=%p\n",
+                nbytes, cxl_numa_node, p);
+
+            return static_cast<uint8_t*>(p);
+        } else {
+            std::fprintf(stderr,
+                    "Warning: NUMA/node1 unavailable for CXL codes allocation, falling back to malloc\n");
+        }
+    }
+
     void* p = std::malloc(nbytes);
-    FAISS_THROW_IF_NOT_MSG(p != nullptr, "allocate_codes_buffer failed");
+    FAISS_THROW_IF_NOT_MSG(p != nullptr, "malloc codes failed");
     return static_cast<uint8_t*>(p);
 }
 
-void TieredArrayInvertedLists::free_ids_buffer(idx_t* ptr, MemoryTier tier) {
-    (void)tier; // later: free with backend-aware allocator
+void TieredArrayInvertedLists::free_ids_buffer(
+        idx_t* ptr,
+        size_t n,
+        MemoryTier tier) {
+    if (!ptr) {
+        return;
+    }
+
+    const size_t nbytes = n * sizeof(idx_t);
+
+    if (tier == MemoryTier::CXL &&
+        numa_available() != -1 &&
+        numa_num_configured_nodes() > 1) {
+        std::printf("CXL free ids: n=%zu bytes=%zu ptr=%p\n", n, nbytes, ptr);
+        numa_free(ptr, nbytes);
+        return;
+    }
+
     std::free(ptr);
 }
 
 void TieredArrayInvertedLists::free_codes_buffer(
         uint8_t* ptr,
+        size_t nbytes,
         MemoryTier tier) {
-    (void)tier; // later: free with backend-aware allocator
+    if (!ptr) {
+        return;
+    }
+
+    if (tier == MemoryTier::CXL &&
+        numa_available() != -1 &&
+        numa_num_configured_nodes() > 1) {
+        std::printf("CXL free codes: bytes=%zu ptr=%p\n", nbytes, ptr);
+        numa_free(ptr, nbytes);
+        return;
+    }
+
     std::free(ptr);
 }
 
@@ -82,8 +142,8 @@ void TieredArrayInvertedLists::free_list_storage(size_t list_no) {
     auto& lst = lists[list_no];
     MemoryTier tier = list_tiers[list_no];
 
-    free_ids_buffer(lst.ids, tier);
-    free_codes_buffer(lst.codes, tier);
+    free_ids_buffer(lst.ids, lst.capacity, tier);
+    free_codes_buffer(lst.codes, lst.capacity * code_size, tier);
 
     lst.ids = nullptr;
     lst.codes = nullptr;
@@ -118,8 +178,8 @@ void TieredArrayInvertedLists::ensure_capacity(size_t list_no, size_t min_capaci
         std::memcpy(new_codes, lst.codes, lst.size * code_size);
     }
 
-    free_ids_buffer(lst.ids, tier);
-    free_codes_buffer(lst.codes, tier);
+    free_ids_buffer(lst.ids, lst.capacity, tier);
+    free_codes_buffer(lst.codes, lst.capacity * code_size, tier);
 
     lst.ids = new_ids;
     lst.codes = new_codes;
@@ -216,8 +276,8 @@ void TieredArrayInvertedLists::relocate_list_storage(
         std::memcpy(new_codes, lst.codes, lst.size * code_size);
     }
 
-    free_ids_buffer(lst.ids, src_tier);
-    free_codes_buffer(lst.codes, src_tier);
+    free_ids_buffer(lst.ids, lst.capacity, src_tier);
+    free_codes_buffer(lst.codes, lst.capacity * code_size, src_tier);
 
     lst.ids = new_ids;
     lst.codes = new_codes;

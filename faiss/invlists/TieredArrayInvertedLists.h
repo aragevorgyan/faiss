@@ -17,6 +17,7 @@
 namespace faiss {
 
 struct TieredArrayInvertedLists : InvertedLists {
+    int cxl_numa_node = 1;
     struct ListStorage {
         idx_t* ids = nullptr;
         uint8_t* codes = nullptr;
@@ -57,8 +58,9 @@ struct TieredArrayInvertedLists : InvertedLists {
    private:
     idx_t* allocate_ids_buffer(size_t n, MemoryTier tier);
     uint8_t* allocate_codes_buffer(size_t nbytes, MemoryTier tier);
-    void free_ids_buffer(idx_t* ptr, MemoryTier tier);
-    void free_codes_buffer(uint8_t* ptr, MemoryTier tier);
+
+    void free_ids_buffer(idx_t* ptr, size_t n, MemoryTier tier);
+    void free_codes_buffer(uint8_t* ptr, size_t nbytes, MemoryTier tier);
 
     void ensure_capacity(size_t list_no, size_t min_capacity);
     void relocate_list_storage(size_t list_no, MemoryTier dst_tier);
