@@ -169,6 +169,24 @@ void IndexIVF::set_all_list_tiers(MemoryTier tier) {
     std::fill(list_tier_.begin(), list_tier_.end(), tier);
 }
 
+void IndexIVF::apply_static_tier_placement() {
+    ensure_list_tier_storage_();
+    FAISS_THROW_IF_NOT_MSG(invlists, "IVF index has no inverted lists");
+
+    // First minimal version:
+    // this is the control hook where physical placement will happen later.
+    // For now, we just walk all lists and validate the tier metadata exists.
+
+    for (size_t i = 0; i < nlist; i++) {
+        MemoryTier tier = list_tier_[i];
+
+        // future step:
+        // if invlists is a tier-aware storage implementation,
+        // ask it to place/move list i according to "tier".
+        (void)tier;
+    }
+}
+
 void IndexIVF::ensure_tier_work_stats_storage_() const {
     if (!tier_work_stats_) {
         tier_work_stats_ = std::make_shared<TierWorkStats>();

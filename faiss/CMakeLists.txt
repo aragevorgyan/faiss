@@ -132,6 +132,7 @@ set(FAISS_SRC
   invlists/DirectMap.cpp
   invlists/InvertedLists.cpp
   invlists/InvertedListsIOHook.cpp
+  invlists/TieredArrayInvertedLists.cpp
   utils/Heap.cpp
   utils/NeuralNet.cpp
   utils/WorkerThread.cpp
@@ -284,6 +285,7 @@ set(FAISS_HEADERS
   invlists/InvertedLists.h
   invlists/InvertedListsIOHook.h
   invlists/OnDiskInvertedLists.h
+  invlists/TieredArrayInvertedLists.h
   utils/AlignedTable.h
   utils/bf16.h
   utils/Heap.h

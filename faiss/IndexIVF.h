@@ -277,6 +277,9 @@ struct IndexIVF : Index, IndexIVFInterface {
     /// count how many list tiers would change if recomputed now
     size_t count_tier_changes_if_recomputed_from_epoch_stats(
             size_t hot_lists_to_keep_in_dram) const;
+			
+	/// apply current logical list_tier_ placement to the underlying storage
+    void apply_static_tier_placement();
 
     /** optional map that maps back ids to invlist entries. This
      *  enables reconstruct() */
