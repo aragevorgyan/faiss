@@ -28,6 +28,13 @@ struct TieredArrayInvertedLists : InvertedLists {
     std::vector<ListStorage> lists;
     std::vector<MemoryTier> list_tiers;
 
+    uint64_t bytes_promoted_epoch = 0;
+    uint64_t bytes_demoted_epoch = 0;
+    uint64_t bytes_promoted_total = 0;
+    uint64_t bytes_demoted_total = 0;
+    uint64_t lists_promoted_epoch = 0;
+    uint64_t lists_demoted_epoch = 0;
+
     explicit TieredArrayInvertedLists(size_t nlist, size_t code_size);
     ~TieredArrayInvertedLists() override;
 
@@ -54,6 +61,14 @@ struct TieredArrayInvertedLists : InvertedLists {
     MemoryTier get_list_tier(size_t list_no) const;
     void set_list_tier(size_t list_no, MemoryTier tier);
     void move_list_to_tier(size_t list_no, MemoryTier tier);
+
+    uint64_t get_bytes_promoted_epoch() const;
+    uint64_t get_bytes_demoted_epoch() const;
+    uint64_t get_bytes_promoted_total() const;
+    uint64_t get_bytes_demoted_total() const;
+    uint64_t get_lists_promoted_epoch() const;
+    uint64_t get_lists_demoted_epoch() const;
+    void reset_migration_epoch_stats();
 
    private:
     idx_t* allocate_ids_buffer(size_t n, MemoryTier tier);

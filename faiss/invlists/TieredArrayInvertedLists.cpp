@@ -281,6 +281,21 @@ void TieredArrayInvertedLists::relocate_list_storage(
 
     lst.ids = new_ids;
     lst.codes = new_codes;
+
+    size_t bytes_moved = 0;
+    if (lst.size > 0) {
+        bytes_moved = lst.size * sizeof(idx_t) + lst.size * code_size;
+    }
+
+    if (dst_tier == MemoryTier::DRAM) {
+        bytes_promoted_epoch += bytes_moved;
+        bytes_promoted_total += bytes_moved;
+        lists_promoted_epoch++;
+    } else {
+        bytes_demoted_epoch += bytes_moved;
+        bytes_demoted_total += bytes_moved;
+        lists_demoted_epoch++;
+    }
 }
 
 void TieredArrayInvertedLists::move_list_to_tier(size_t list_no, MemoryTier tier) {
@@ -300,5 +315,37 @@ void TieredArrayInvertedLists::move_list_to_tier(size_t list_no, MemoryTier tier
             int(old_tier),
             int(tier),
             lists[list_no].size);
-}
+
+    }
+    uint64_t TieredArrayInvertedLists::get_bytes_promoted_epoch() const {
+    	return bytes_promoted_epoch;
+	}
+
+    uint64_t TieredArrayInvertedLists::get_bytes_demoted_epoch() const {
+    	return bytes_demoted_epoch;
+    }	
+
+    uint64_t TieredArrayInvertedLists::get_bytes_promoted_total() const {
+   	return bytes_promoted_total;
+    }
+
+    uint64_t TieredArrayInvertedLists::get_bytes_demoted_total() const {
+   	return bytes_demoted_total;
+    }
+
+    uint64_t TieredArrayInvertedLists::get_lists_promoted_epoch() const {
+   	return lists_promoted_epoch;
+    }
+
+    uint64_t TieredArrayInvertedLists::get_lists_demoted_epoch() const {
+   	return lists_demoted_epoch;
+    }
+
+    void TieredArrayInvertedLists::reset_migration_epoch_stats() {
+   	bytes_promoted_epoch = 0;
+   	bytes_demoted_epoch = 0;
+   	lists_promoted_epoch = 0;
+   	lists_demoted_epoch = 0;
+    }
+
 } // namespace faiss

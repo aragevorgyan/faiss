@@ -89,16 +89,23 @@ static const char* tier_to_string(faiss::MemoryTier tier) {
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     try {
+	if (argc < 4) {
+            std::printf("Usage: %s <nlist> <nprobe> <hot_lists>\n", argv[0]);
+            return 1;
+        }
+
+
         const std::string learn_file = "sift/sift_learn.fvecs";
         const std::string base_file = "sift/sift_base.fvecs";
         const std::string query_file = "sift/sift_query.fvecs";
 
-        const int nlist = 100;
-        const int k = 4;
-        const size_t hot_lists_to_keep_in_dram = 20;
-        const size_t epoch_count = 5;
+	const int nlist = std::atoi(argv[1]);
+	const int nprobe_val = std::atoi(argv[2]);
+	const size_t hot_lists_to_keep_in_dram = std::atol(argv[3]);
+	const int k = 10;
+	const size_t epoch_count = 5;
 
         // -------------------------------------------------
         // Step 0: load SIFT data
@@ -155,7 +162,7 @@ int main() {
         // -------------------------------------------------
         // Step 5: prepare search
         // -------------------------------------------------
-        index.nprobe = 10;
+        index.nprobe = nprobe_val;
 
         std::vector<float> distances(static_cast<size_t>(k) * nq);
         std::vector<faiss::idx_t> labels(static_cast<size_t>(k) * nq);
@@ -184,6 +191,7 @@ int main() {
             // Reset epoch stats and search one epoch only
             // ---------------------------------------------
             index.reset_list_epoch_stats();
+	    tiered_invlists->reset_migration_epoch_stats();
 
             index.search(
                     static_cast<faiss::idx_t>(q_count),
@@ -263,6 +271,21 @@ int main() {
             index.recompute_tiers_from_epoch_stats(hot_lists_to_keep_in_dram);
             index.apply_static_tier_placement();
 
+	    std::printf("\nActual migration (measured):\n");
+	    std::printf("  promoted (CXL->DRAM): %llu lists, %llu bytes (%.2f MB)\n",
+    		(unsigned long long)tiered_invlists->get_lists_promoted_epoch(),
+    		(unsigned long long)tiered_invlists->get_bytes_promoted_epoch(),
+    		tiered_invlists->get_bytes_promoted_epoch() / (1024.0 * 1024.0));
+	    std::printf("  demoted  (DRAM->CXL): %llu lists, %llu bytes (%.2f MB)\n",
+    		(unsigned long long)tiered_invlists->get_lists_demoted_epoch(),
+    		(unsigned long long)tiered_invlists->get_bytes_demoted_epoch(),
+    		tiered_invlists->get_bytes_demoted_epoch() / (1024.0 * 1024.0));
+	    std::printf("  total moved: %llu bytes (%.2f MB)\n",
+    		(unsigned long long)(tiered_invlists->get_bytes_promoted_epoch() +
+                          tiered_invlists->get_bytes_demoted_epoch()),
+    		(tiered_invlists->get_bytes_promoted_epoch() +
+     		tiered_invlists->get_bytes_demoted_epoch()) / (1024.0 * 1024.0));
+
             std::vector<faiss::MemoryTier> curr_tiers = index.get_list_tiers();
 
             // refresh tiers in stats
@@ -289,6 +312,23 @@ int main() {
                     changed_tiers = observed_changes;
                 }
             }
+
+	    if (!prev_tiers.empty()) {
+    		size_t intersection = 0;
+    		size_t union_size = 0;
+
+    	    	for (size_t i = 0; i < curr_tiers.size(); i++) {
+        		bool was_dram = (prev_tiers[i] == faiss::MemoryTier::DRAM);
+        		bool is_dram = (curr_tiers[i] == faiss::MemoryTier::DRAM);
+        		if (was_dram && is_dram) intersection++;
+        		if (was_dram || is_dram) union_size++;
+    	    	}
+
+    	    	double jaccard = union_size > 0 ? double(intersection) / double(union_size) : 1.0;
+
+    	    	std::printf("\nHot set stability:\n");
+   	    	std::printf("  Jaccard similarity with previous epoch: %.4f\n", jaccard);
+	    }
 
             prev_tiers = curr_tiers;
 
